@@ -261,3 +261,121 @@ El proyecto soporta las siguientes variables de entorno:
 Puedes exportarlas en tu shell, definirlas en PM2 o usar un archivo `.env` (asegúrate de agregarlo a `.gitignore`).
 
 
+## Despliegue en Render
+
+### Requisitos previos
+- Cuenta en [Render](https://render.com)
+- Repositorio Git (GitHub, GitLab o Bitbucket) con tu código
+
+### Opción 1: Despliegue automático con render.yaml (Recomendado)
+
+1. **Asegúrate de que tu código esté en un repositorio Git:**
+```bash
+git init
+git add .
+git commit -m "Preparar para despliegue en Render"
+git remote add origin <URL_DE_TU_REPO>
+git push -u origin main
+```
+
+2. **Crear cuenta y conectar repositorio en Render:**
+   - Ve a [dashboard.render.com](https://dashboard.render.com)
+   - Haz clic en "New +" y selecciona "Blueprint"
+   - Conecta tu repositorio Git
+   - Render detectará automáticamente el archivo `render.yaml` y configurará todo
+
+3. **Configurar variables de entorno:**
+   - Una vez creado el servicio, ve a "Environment" en el dashboard
+   - Configura manualmente `JWT_SECRET` con un valor seguro (mínimo 32 caracteres)
+   - Configura `ALLOWED_ORIGINS` con la URL de tu aplicación (ejemplo: `https://distrital4-jefatura.onrender.com`)
+   - Opcional: Configura `ADMIN_DEFAULT_PASSWORD` si quieres cambiar la contraseña por defecto del admin
+
+4. **Esperar el despliegue:**
+   - Render construirá y desplegará tu aplicación automáticamente
+   - La URL será algo como: `https://distrital4-jefatura.onrender.com`
+
+### Opción 2: Despliegue manual paso a paso
+
+1. **Crear base de datos PostgreSQL:**
+   - En Render Dashboard, haz clic en "New +" → "PostgreSQL"
+   - Nombre: `distrital4-db`
+   - Plan: Starter (gratuito)
+   - Database: `distrital4_jefatura`
+   - Usuario: `distrital_user`
+   - Guarda las credenciales que te proporciona
+
+2. **Crear servicio Web:**
+   - Haz clic en "New +" → "Web Service"
+   - Conecta tu repositorio Git
+   - Configuración:
+     - **Name:** `distrital4-jefatura`
+     - **Environment:** `Node`
+     - **Build Command:** `npm install`
+     - **Start Command:** `npm start`
+     - **Plan:** Starter (gratuito)
+
+3. **Configurar variables de entorno:**
+   En la sección "Environment" del servicio web, agrega:
+   ```
+   NODE_ENV=production
+   PORT=3001
+   JWT_SECRET=<genera_un_secreto_seguro_de_al_menos_32_caracteres>
+   JWT_EXPIRES_IN=8h
+   DB_HOST=<host_de_la_base_de_datos>
+   DB_PORT=5432
+   DB_NAME=distrital4_jefatura
+   DB_USER=distrital_user
+   DB_PASSWORD=<contraseña_de_la_base_de_datos>
+   DB_SSL=true
+   DB_LOGGING=false
+   DB_ALTER=false
+   ALLOWED_ORIGINS=https://distrital4-jefatura.onrender.com
+   ```
+   
+   **Nota:** Puedes obtener las credenciales de la base de datos desde el dashboard de PostgreSQL que creaste.
+
+4. **Desplegar:**
+   - Haz clic en "Create Web Service"
+   - Render construirá y desplegará tu aplicación
+
+### Configuración post-despliegue
+
+1. **Acceder a la aplicación:**
+   - Una vez desplegada, tu aplicación estará disponible en la URL proporcionada por Render
+   - Ejemplo: `https://distrital4-jefatura.onrender.com`
+
+2. **Credenciales iniciales:**
+   - Usuario: `admin`
+   - Contraseña: `hijoteamo2` (o la que configuraste en `ADMIN_DEFAULT_PASSWORD`)
+   - **IMPORTANTE:** Cambia esta contraseña inmediatamente después del primer inicio de sesión
+
+3. **Verificar la base de datos:**
+   - La aplicación creará automáticamente las tablas necesarias al iniciar
+   - Verifica en los logs que veas: "Conexión a la base de datos PostgreSQL establecida exitosamente"
+
+### Notas importantes para Render
+
+- **Inactividad en plan gratuito:** Los servicios gratuitos de Render se "duermen" después de 15 minutos de inactividad. La primera petición puede tardar unos segundos en despertar el servicio.
+- **Actualizaciones:** Cada vez que hagas `git push` a tu repositorio, Render desplegará automáticamente los cambios.
+- **Logs:** Puedes ver los logs en tiempo real desde el dashboard de Render.
+- **Base de datos:** El plan gratuito de PostgreSQL tiene limitaciones de almacenamiento (1 GB). Para producción, considera un plan superior.
+- **SSL:** Render proporciona SSL automático para todas las aplicaciones.
+
+### Solución de problemas en Render
+
+- **Error de conexión a la base de datos:** Verifica que las variables de entorno estén correctamente configuradas y que la base de datos esté activa.
+- **Error 503:** El servicio puede estar "dormido". Espera unos segundos y vuelve a intentar.
+- **Error de JWT_SECRET:** Asegúrate de que `JWT_SECRET` tenga al menos 32 caracteres.
+- **CORS errors:** Verifica que `ALLOWED_ORIGINS` incluya la URL correcta de tu aplicación en Render.
+
+### Actualizar la aplicación
+
+Para actualizar la aplicación en Render:
+```bash
+git add .
+git commit -m "Descripción de los cambios"
+git push
+```
+
+Render detectará automáticamente los cambios y desplegará una nueva versión.
+

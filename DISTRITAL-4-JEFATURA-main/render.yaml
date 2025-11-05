@@ -1,0 +1,50 @@
+services:
+  # Base de datos PostgreSQL
+  - type: pspg
+    name: distrital4-db
+    plan: starter
+    databaseName: distrital4_jefatura
+
+  # Servicio web (Backend + Frontend)
+  - type: web
+    name: distrital4-jefatura
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 8h
+      - key: DB_SSL
+        value: "true"
+      - key: DB_LOGGING
+        value: "false"
+      - key: DB_ALTER
+        value: "false"
+      - key: DB_HOST
+        fromDatabase:
+          name: distrital4-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: distrital4-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: distrital4-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: distrital4-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: distrital4-db
+          property: password
+
