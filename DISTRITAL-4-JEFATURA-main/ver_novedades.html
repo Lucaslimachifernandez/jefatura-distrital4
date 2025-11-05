@@ -54,8 +54,10 @@
         <button onclick="window.history.back()">Volver a la página anterior</button>
     </div>
 
+    <script src="config.js"></script>
     <script>
-        const API_BASE_URL = 'http://localhost:3001'; // Define the API base URL
+        // Usar configuración centralizada
+        const API_BASE_URL = Config.API_BASE_URL;
         let allNovedades = []; // Variable global para almacenar todas las novedades
         let currentNovedadesToRender = []; // Variable para almacenar las novedades actuales renderizadas
 

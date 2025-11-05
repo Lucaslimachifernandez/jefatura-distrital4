@@ -89,11 +89,12 @@
         </div>
     </div>
 
+    <script src="config.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            const loggedInUsername = localStorage.getItem('loggedInUsername');
-            const userRole = localStorage.getItem('userRole');
-            const jwtToken = localStorage.getItem('jwtToken');
+            const loggedInUsername = localStorage.getItem(Config.USERNAME_KEY);
+            const userRole = localStorage.getItem(Config.USER_ROLE_KEY);
+            const jwtToken = localStorage.getItem(Config.TOKEN_KEY);
             const welcomeMessage = document.getElementById('welcomeMessage');
             const novedadesParteBtn = document.getElementById('novedadesParteBtn');
             const verNovedadesBtn = document.getElementById('verNovedadesBtn');
@@ -123,11 +124,11 @@
             var closeUsersModal = document.getElementById("closeUsersModal");
             var usersList = document.getElementById("usersList");
 
-            // Obtener el ID del usuario logueado del localStorage (almacenado durante el login)
-            const loggedInUserId = localStorage.getItem('loggedInUserId'); // Necesitamos almacenar esto en el login
+            // Obtener el ID del usuario logueado del localStorage
+            const loggedInUserId = localStorage.getItem(Config.USER_ID_KEY);
 
             if (!jwtToken) {
-                window.location.href = 'index.html'; // Redirigir si no hay token
+                window.location.href = 'index.html';
                 return;
             }
 
@@ -246,11 +247,11 @@
 
             // Manejar el logout
             logoutBtn.addEventListener('click', () => {
-                localStorage.removeItem('jwtToken');
-                localStorage.removeItem('loggedInUsername');
-                localStorage.removeItem('userRole');
-                localStorage.removeItem('loggedInUserId'); // Eliminar también la ID del usuario
-                window.location.href = 'index.html'; // Redirigir a la página de login
+                localStorage.removeItem(Config.TOKEN_KEY);
+                localStorage.removeItem(Config.USERNAME_KEY);
+                localStorage.removeItem(Config.USER_ROLE_KEY);
+                localStorage.removeItem(Config.USER_ID_KEY);
+                window.location.href = 'index.html';
             });
 
             // Lógica del modal de registro
@@ -289,7 +290,7 @@
                     return;
                 }
 
-                const adminToken = localStorage.getItem('jwtToken');
+                const adminToken = localStorage.getItem(Config.TOKEN_KEY);
                 if (!adminToken) {
                     alert('Error: Token de administrador no encontrado.');
                     return;
@@ -304,114 +305,89 @@
                 const hierarchy = regHierarchy.value;
 
                 try {
-                    const API_BASE_URL = 'http://localhost:3001'; // URL de tu backend en Render
-                    const response = await fetch(`${API_BASE_URL}/register`, {
+                    const data = await apiRequest('/register', {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json',
                             'Authorization': `Bearer ${adminToken}`
                         },
                         body: JSON.stringify({ username, password, role, name, lastName, phone, hierarchy })
                     });
 
-                    const data = await response.json();
-
-                    if (response.ok) {
-                        alert(data.message);
-                        modal.style.display = 'none'; // Cerrar modal
-                        registerForm.reset(); // Limpiar formulario
-                        if (usersModal.style.display === 'flex') {
-                            fetchUsers(); 
-                        }
-                    } else {
-                        alert(data.message || 'Error al registrar usuario.');
+                    alert(data.message);
+                    modal.style.display = 'none';
+                    registerForm.reset();
+                    if (usersModal.style.display === 'flex') {
+                        fetchUsers(); 
                     }
                 } catch (error) {
-                    console.error('Error de red o del servidor:', error);
-                    alert('Error de conexión con el servidor.');
+                    alert(error.message || 'Error al registrar usuario.');
                 }
             };
 
             // Función para obtener y mostrar usuarios
             async function fetchUsers() {
-                const adminToken = localStorage.getItem('jwtToken');
+                const adminToken = localStorage.getItem(Config.TOKEN_KEY);
                 if (!adminToken) {
                     alert('Error: Token de administrador no encontrado. No se pueden cargar usuarios.');
                     return;
                 }
 
                 try {
-                    const API_BASE_URL = 'http://localhost:3001'; // URL de tu backend en Render
-                    const response = await fetch(`${API_BASE_URL}/users`, {
+                    const usersData = await apiRequest('/users', {
                         method: 'GET',
                         headers: {
                             'Authorization': `Bearer ${adminToken}`
                         }
                     });
 
-                    const usersData = await response.json();
-
-                    if (response.ok) {
-                        usersList.innerHTML = ''; // Limpiar lista anterior
-                        if (usersData.length === 0) {
-                            usersList.innerHTML = '<p>No hay usuarios registrados.</p>';
-                            return;
-                        }
-                        const ul = document.createElement('ul');
-                        usersData.forEach(user => {
-                            const li = document.createElement('li');
-                            li.innerHTML = `ID: ${user.id}, Usuario: ${user.username}, Rol: ${user.role}`;
-                            if (userRole === 'admin' && user.id !== parseInt(loggedInUserId)) {
-                                const deleteBtn = document.createElement('button');
-                                deleteBtn.textContent = 'Eliminar';
-                                deleteBtn.classList.add('delete-user-btn');
-                                deleteBtn.onclick = async () => {
-                                    if (confirm(`¿Estás seguro de que quieres eliminar a ${user.username}?`)) {
-                                        await deleteUser(user.id); 
-                                    }
-                                };
-                                li.appendChild(deleteBtn);
-                            }
-                            ul.appendChild(li);
-                        });
-                        usersList.appendChild(ul);
-                    } else {
-                        alert(usersData.message || 'Error al cargar usuarios.');
+                    usersList.innerHTML = '';
+                    if (usersData.length === 0) {
+                        usersList.innerHTML = '<p>No hay usuarios registrados.</p>';
+                        return;
                     }
+                    const ul = document.createElement('ul');
+                    usersData.forEach(user => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `ID: ${user.id}, Usuario: ${user.username}, Rol: ${user.role}`;
+                        if (userRole === 'admin' && user.id !== parseInt(loggedInUserId)) {
+                            const deleteBtn = document.createElement('button');
+                            deleteBtn.textContent = 'Eliminar';
+                            deleteBtn.classList.add('delete-user-btn');
+                            deleteBtn.onclick = async () => {
+                                if (confirm(`¿Estás seguro de que quieres eliminar a ${user.username}?`)) {
+                                    await deleteUser(user.id); 
+                                }
+                            };
+                            li.appendChild(deleteBtn);
+                        }
+                        ul.appendChild(li);
+                    });
+                    usersList.appendChild(ul);
                 } catch (error) {
-                    console.error('Error de red o del servidor al cargar usuarios:', error);
-                    alert('Error de conexión con el servidor al cargar usuarios.');
+                    alert(error.message || 'Error al cargar usuarios.');
                 }
             }
 
             // Función para eliminar un usuario
             async function deleteUser(userId) {
-                const adminToken = localStorage.getItem('jwtToken');
+                const adminToken = localStorage.getItem(Config.TOKEN_KEY);
                 if (!adminToken) {
                     alert('Error: Token de administrador no encontrado. No se puede eliminar usuarios.');
                     return;
                 }
 
                 try {
-                    const API_BASE_URL = 'http://localhost:3001'; // URL de tu backend en Render
-                    const response = await fetch(`${API_BASE_URL}/users/${userId}`, {
+                    const data = await apiRequest(`/users/${userId}`, {
                         method: 'DELETE',
                         headers: {
                             'Authorization': `Bearer ${adminToken}`
                         }
                     });
 
-                    const data = await response.json();
-
-                    if (response.ok) {
-                        alert(data.message);
-                        fetchUsers(); // Recargar la lista de usuarios
-                    } else {
-                        alert(data.message || 'Error al eliminar usuario.');
-                    }
+                    alert(data.message);
+                    fetchUsers();
                 } catch (error) {
-                    console.error('Error de red o del servidor al eliminar usuario:', error);
-                    alert('Error de conexión con el servidor al eliminar usuario.');
+                    alert(error.message || 'Error al eliminar usuario.');
                 }
             }
 

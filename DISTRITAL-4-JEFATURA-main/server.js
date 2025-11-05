@@ -1,3 +1,6 @@
+// Cargar variables de entorno
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -6,15 +9,25 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Sequelize, DataTypes } = require('sequelize');
 
+// Importar módulos de mejoras
+const logger = require('./utils/logger');
+const { errorHandler, notFoundHandler, validationErrorHandler } = require('./middleware/errorHandler');
+const { validateUserData } = require('./validators/userValidator');
+const { scheduleBackups } = require('./utils/backup');
+
 const app = express();
 app.disable('x-powered-by');
 
+// Middleware de logging de peticiones
 app.use((req, res, next) => {
-  console.log(`BACKEND DEBUG: Petición global: ${req.method} ${req.originalUrl}`);
+  logger.debug(`Petición recibida: ${req.method} ${req.originalUrl}`, {
+    ip: req.ip,
+    userAgent: req.get('user-agent')
+  });
   next();
 });
 
-const PORT = process.env.PORT || 3001; // Cambiado a 3001 temporalmente
+const PORT = process.env.PORT || 3001;
 
 // Configuración de Sequelize para SQLite
 const sequelize = new Sequelize({
@@ -27,9 +40,9 @@ const sequelize = new Sequelize({
 async function connectDB() {
   try {
     await sequelize.authenticate();
-    console.log('BACKEND DEBUG: Conexión a la base de datos SQLite establecida exitosamente.');
+    logger.info('Conexión a la base de datos SQLite establecida exitosamente');
   } catch (error) {
-    console.error('BACKEND DEBUG: No se pudo conectar a la base de datos SQLite:', error);
+    logger.error('No se pudo conectar a la base de datos SQLite', { error: error.message });
   }
 }
 
@@ -44,13 +57,33 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*')
 
 app.use(cors({
   origin: (origin, callback) => {
+    // En desarrollo, permitir cualquier origen
+    if (process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
+    
+    // En producción, validar origen
     if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
+    logger.warn('Intento de acceso desde origen no permitido', { origin, allowedOrigins });
     return callback(new Error('Origin not allowed by CORS'));
-  }
+  },
+  credentials: true,
 }));
-app.use(helmet());
+
+// Configuración mejorada de Helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+}));
 // Seguridad adicional de contenido
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -75,11 +108,17 @@ app.use((req, res, next) => {
 // Archivos estáticos solo desde la raíz actual, pero con bloqueo anterior
 app.use(express.static(__dirname));
 
-// Clave secreta para JWT (debería ser una variable de entorno en producción)
+// Clave secreta para JWT
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '8h';
+
 if (process.env.NODE_ENV === 'production' && JWT_SECRET === 'supersecretkey') {
-  console.error('Configuración insegura: define JWT_SECRET en producción.');
+  logger.error('Configuración insegura: define JWT_SECRET en producción');
   process.exit(1);
+}
+
+if (process.env.NODE_ENV === 'production' && JWT_SECRET.length < 32) {
+  logger.warn('JWT_SECRET es muy corto. Se recomienda al menos 32 caracteres para producción');
 }
 
 // Definición del modelo User
@@ -228,18 +267,23 @@ async function syncDB() {
   try {
     const alter = process.env.DB_ALTER === 'true';
     await sequelize.sync({ alter });
-    console.log('BACKEND DEBUG: Modelos sincronizados con la base de datos.');
+    logger.info('Modelos sincronizados con la base de datos');
     
     // Asegurarse de que el usuario admin exista
     const adminUser = await User.findOne({ where: { username: 'admin' } });
     if (!adminUser) {
-      const hashedPassword = await bcrypt.hash('hijoteamo2', 10); // Contraseña por defecto
+      const defaultPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'hijoteamo2';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
       await User.create({ username: 'admin', password: hashedPassword, role: 'admin' });
-      console.log('BACKEND DEBUG: Usuario admin creado si no existía.');
+      logger.warn('Usuario admin creado con contraseña por defecto. CAMBIA LA CONTRASEÑA EN PRODUCCIÓN', {
+        username: 'admin',
+        password: defaultPassword
+      });
     }
 
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al sincronizar modelos o crear admin:', error);
+    logger.error('Error al sincronizar modelos o crear admin', { error: error.message });
+    throw error;
   }
 }
 
@@ -323,29 +367,46 @@ app.get('/novedades', authenticateToken, async (req, res) => {
     
     res.json(novedades);
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al obtener novedades:', error);
-    res.status(500).json({ message: 'Error interno del servidor al obtener novedades' });
+    logger.error('Error al obtener novedades', { error: error.message, userId: req.user.id });
+    next(error);
   }
 });
 
 // Guardar una nueva novedad
-app.post('/novedades', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res) => {
+app.post('/novedades', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res, next) => {
   const newNovedadData = req.body;
-  console.log('BACKEND DEBUG: Datos recibidos para nueva novedad:', newNovedadData); // Añadido para depuración
+  logger.debug('Intento de crear nueva novedad', { 
+    userId: req.user.id, 
+    username: req.user.username,
+    dependencia: newNovedadData.dependencia 
+  });
+  
   try {
     const newNovedad = await Novedad.create(newNovedadData);
+    logger.info('Novedad creada exitosamente', { 
+      novedadId: newNovedad.id, 
+      createdBy: req.user.username 
+    });
     res.status(201).json(newNovedad);
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al guardar nueva novedad:', error);
-    console.error('BACKEND DEBUG: Detalles del error de la novedad:', error.message, error.errors); // Agregado para más detalles
-    res.status(500).json({ message: 'Error interno del servidor al guardar novedad', details: error.message, errors: error.errors }); // Modificado para devolver detalles del error
+    logger.error('Error al guardar nueva novedad', { 
+      error: error.message, 
+      errors: error.errors,
+      userId: req.user.id 
+    });
+    next(error);
   }
 });
 
 // Actualizar una novedad existente
-app.put('/novedades/:id', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res) => {
+app.put('/novedades/:id', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res, next) => {
   const novedadId = req.params.id;
   const updatedNovedadData = req.body;
+
+  logger.debug('Intento de actualizar novedad', { 
+    novedadId, 
+    userId: req.user.id 
+  });
 
   try {
     const updatedRowsCount = await Novedad.update(updatedNovedadData, {
@@ -353,48 +414,78 @@ app.put('/novedades/:id', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES),
     });
 
     if (updatedRowsCount > 0) {
-      const updatedNovedad = await Novedad.findByPk(novedadId); // Volver a buscar la novedad actualizada
+      const updatedNovedad = await Novedad.findByPk(novedadId);
+      logger.info('Novedad actualizada exitosamente', { 
+        novedadId, 
+        updatedBy: req.user.username 
+      });
       res.json(updatedNovedad);
     } else {
+      logger.warn('Intento de actualizar novedad inexistente', { novedadId });
       res.status(404).json({ message: 'Novedad no encontrada' });
     }
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al actualizar novedad:', error);
-    console.error('BACKEND DEBUG: Detalles del error de actualización de la novedad:', error.message, error.errors); // Agregado para más detalles
-    res.status(500).json({ message: 'Error interno del servidor al actualizar novedad' });
+    logger.error('Error al actualizar novedad', { 
+      error: error.message, 
+      novedadId,
+      userId: req.user.id 
+    });
+    next(error);
   }
 });
 
 // Eliminar una novedad
-app.delete('/novedades/:id', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res) => {
+app.delete('/novedades/:id', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), async (req, res, next) => {
   const novedadId = req.params.id;
+
+  logger.debug('Intento de eliminar novedad', { 
+    novedadId, 
+    userId: req.user.id 
+  });
 
   try {
     const deletedRowCount = await Novedad.destroy({ where: { id: novedadId } });
 
     if (deletedRowCount > 0) {
+      logger.info('Novedad eliminada exitosamente', { 
+        novedadId, 
+        deletedBy: req.user.username 
+      });
       res.json({ message: 'Novedad eliminada exitosamente' });
     } else {
+      logger.warn('Intento de eliminar novedad inexistente', { novedadId });
       res.status(404).json({ message: 'Novedad no encontrada' });
     }
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al eliminar novedad:', error);
-    res.status(500).json({ message: 'Error interno del servidor al eliminar novedad' });
+    logger.error('Error al eliminar novedad', { 
+      error: error.message, 
+      novedadId,
+      userId: req.user.id 
+    });
+    next(error);
   }
 });
 
 // Ruta de registro
-app.post('/register', authenticateToken, authorizeRoles(['admin']), async (req, res) => {
-  console.log('BACKEND DEBUG: Petición de registro recibida.');
-  const { username, password, role, name, lastName, phone, hierarchy } = req.body; // Campos adicionales
+app.post('/register', authenticateToken, authorizeRoles(['admin']), async (req, res, next) => {
+  logger.debug('Petición de registro recibida', { username: req.body.username, requestedBy: req.user.username });
+  
+  const { username, password, role, name, lastName, phone, hierarchy } = req.body;
 
-  if (!username || !password) {
-    return res.status(400).json({ message: 'Se requieren nombre de usuario y contraseña' });
+  // Validar datos de entrada
+  const validation = validateUserData({ username, password, role, phone });
+  if (!validation.valid) {
+    logger.warn('Intento de registro con datos inválidos', { errors: validation.errors });
+    return res.status(400).json({ 
+      message: 'Error de validación', 
+      errors: validation.errors 
+    });
   }
 
   try {
     const existingUser = await User.findOne({ where: { username: username } });
     if (existingUser) {
+      logger.warn('Intento de registro con usuario existente', { username });
       return res.status(400).json({ message: 'El nombre de usuario ya existe' });
     }
 
@@ -409,7 +500,11 @@ app.post('/register', authenticateToken, authorizeRoles(['admin']), async (req, 
       hierarchy: hierarchy || null,
     });
 
-    console.log('BACKEND DEBUG: Usuario registrado exitosamente en DB:', newUser.username);
+    logger.info('Usuario registrado exitosamente', { 
+      username: newUser.username, 
+      role: newUser.role,
+      createdBy: req.user.username 
+    });
 
     res.status(201).json({
       message: 'Usuario registrado exitosamente',
@@ -424,52 +519,61 @@ app.post('/register', authenticateToken, authorizeRoles(['admin']), async (req, 
       }
     });
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al registrar usuario:', error);
-    res.status(500).json({ message: 'Error interno del servidor al registrar usuario' });
+    logger.error('Error al registrar usuario', { error: error.message, username });
+    next(error);
   }
 });
 
 // Ruta de inicio de sesión
-app.post('/login', async (req, res) => {
+app.post('/login', async (req, res, next) => {
   const { username, password } = req.body;
-  console.log(`BACKEND DEBUG: Intento de login recibido - Usuario: ${username}`);
+  logger.debug('Intento de login recibido', { username });
 
   if (!username || !password) {
-    console.log('BACKEND DEBUG: Faltan credenciales.');
+    logger.warn('Intento de login sin credenciales completas');
     return res.status(400).json({ message: 'Se requieren nombre de usuario y contraseña' });
   }
 
   try {
     const user = await User.findOne({ where: { username: username } });
     if (!user) {
-      console.log(`BACKEND DEBUG: Usuario ${username} no encontrado en DB.`);
+      logger.warn('Intento de login con usuario inexistente', { username });
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      console.log(`BACKEND DEBUG: Contraseña incorrecta para el usuario ${username}.`);
+      logger.warn('Intento de login con contraseña incorrecta', { username });
       return res.status(401).json({ message: 'Credenciales inválidas' });
     }
 
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role },
       JWT_SECRET,
-      { expiresIn: '1h' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
 
-    console.log(`BACKEND DEBUG: Login exitoso para el usuario ${username}.`);
+    logger.info('Login exitoso', { username: user.username, role: user.role });
     res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al iniciar sesión:', error);
-    res.status(500).json({ message: 'Error interno del servidor al iniciar sesión', error: error.message });
+    logger.error('Error al iniciar sesión', { error: error.message, username });
+    next(error);
   }
 });
 
 // Rate limiting en endpoints sensibles
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutos por defecto
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 100, // 100 intentos por ventana
+  message: 'Demasiados intentos. Por favor, inténtalo más tarde.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn('Rate limit excedido', { ip: req.ip, path: req.path });
+    res.status(429).json({ 
+      message: 'Demasiados intentos. Por favor, inténtalo más tarde.' 
+    });
+  },
 });
 app.use(['/login', '/register'], authLimiter);
 
@@ -486,35 +590,53 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Ruta para eliminar un usuario (solo accesible por administradores)
-app.delete('/users/:id', authenticateToken, authorizeRoles(['admin']), async (req, res) => {
-  const userId = req.params.id; // Sequelize manejará la conversión de tipo si el ID es un INTEGER
+app.delete('/users/:id', authenticateToken, authorizeRoles(['admin']), async (req, res, next) => {
+  const userId = req.params.id;
+
+  logger.debug('Intento de eliminar usuario', { 
+    userId, 
+    requestedBy: req.user.username 
+  });
 
   try {
     const deletedRowCount = await User.destroy({ where: { id: userId } });
 
     if (deletedRowCount > 0) {
+      logger.info('Usuario eliminado exitosamente', { 
+        userId, 
+        deletedBy: req.user.username 
+      });
       res.json({ message: 'Usuario eliminado exitosamente' });
     } else {
+      logger.warn('Intento de eliminar usuario inexistente', { userId });
       res.status(404).json({ message: 'Usuario no encontrado' });
     }
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al eliminar usuario:', error);
-    res.status(500).json({ message: 'Error interno del servidor al eliminar usuario' });
+    logger.error('Error al eliminar usuario', { 
+      error: error.message, 
+      userId 
+    });
+    next(error);
   }
 });
 
 // Ruta para obtener todos los usuarios (solo accesible por administradores)
-app.get('/users', authenticateToken, authorizeRoles(['admin']), async (req, res) => {
+app.get('/users', authenticateToken, authorizeRoles(['admin']), async (req, res, next) => {
   try {
-    const users = await User.findAll({ attributes: { exclude: ['password'] } }); // Excluir contraseñas
+    const users = await User.findAll({ attributes: { exclude: ['password'] } });
+    logger.debug('Lista de usuarios obtenida', { 
+      count: users.length, 
+      requestedBy: req.user.username 
+    });
     res.json(users);
   } catch (error) {
-    console.error('BACKEND DEBUG: Error al obtener usuarios:', error);
-    res.status(500).json({ message: 'Error interno del servidor al obtener usuarios' });
+    logger.error('Error al obtener usuarios', { 
+      error: error.message, 
+      userId: req.user.id 
+    });
+    next(error);
   }
 });
-
-// Ruta protegida de ejemplo (solo para administradores)
 
 // Nuevas rutas protegidas para "Usuario-Oficiales", "admin", "OFICIAL DE 15", "OFICIAL DE 20", "OFICIAL DE 65", "OFICIAL DE 18", "OFICIAL MANZANO HISTORICO", "OFICIAL CORDON DEL PLATA", "JEF.DTAL.TUNUYAN" y "JEF.DTAL.SAN CARLOS"
 app.get('/novedades_parte', authenticateToken, authorizeRoles(ALL_OFFICIAL_ROLES), (req, res) => {
@@ -537,11 +659,26 @@ app.get('/', (req, res) => {
 async function startServer() {
   try {
     await syncDB(); // Asegurarse de que la BD esté lista antes de iniciar
+    
+    // Programar backups automáticos
+    const backupFrequency = process.env.BACKUP_FREQUENCY || 'daily';
+    scheduleBackups(backupFrequency);
+    logger.info('Sistema de backups programado', { frequency: backupFrequency });
+    
+    // Middleware de manejo de errores (debe ir al final, antes de listen)
+    app.use(validationErrorHandler);
+    app.use(notFoundHandler);
+    app.use(errorHandler);
+    
     app.listen(PORT, () => {
-      console.log(`Servidor corriendo en el puerto ${PORT}`);
+      logger.info(`Servidor corriendo en el puerto ${PORT}`, { 
+        environment: process.env.NODE_ENV || 'development',
+        port: PORT 
+      });
     });
   } catch (error) {
-    console.error('No se pudo iniciar el servidor:', error);
+    logger.error('No se pudo iniciar el servidor', { error: error.message });
+    process.exit(1);
   }
 }
 
