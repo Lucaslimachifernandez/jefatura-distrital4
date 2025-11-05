@@ -29,20 +29,47 @@ app.use((req, res, next) => {
 
 const PORT = process.env.PORT || 3001;
 
-// Configuración de Sequelize para SQLite
-const sequelize = new Sequelize({
-  dialect: 'sqlite',
-  storage: './database.sqlite', // Archivo de la base de datos
-  logging: false // Deshabilita los logs de SQL de Sequelize
-});
+// Configuración de Sequelize para PostgreSQL
+const sequelize = new Sequelize(
+  process.env.DB_NAME || 'distrital4_jefatura',
+  process.env.DB_USER || 'postgres',
+  process.env.DB_PASSWORD || 'postgres',
+  {
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    dialect: 'postgres',
+    logging: process.env.DB_LOGGING === 'true' ? console.log : false,
+    dialectOptions: {
+      ssl: process.env.DB_SSL === 'true' ? {
+        require: true,
+        rejectUnauthorized: false
+      } : false
+    },
+    pool: {
+      max: 5,
+      min: 0,
+      acquire: 30000,
+      idle: 10000
+    }
+  }
+);
 
 // Test de conexión a la base de datos
 async function connectDB() {
   try {
     await sequelize.authenticate();
-    logger.info('Conexión a la base de datos SQLite establecida exitosamente');
+    logger.info('Conexión a la base de datos PostgreSQL establecida exitosamente', {
+      database: process.env.DB_NAME || 'distrital4_jefatura',
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 5432
+    });
   } catch (error) {
-    logger.error('No se pudo conectar a la base de datos SQLite', { error: error.message });
+    logger.error('No se pudo conectar a la base de datos PostgreSQL', { 
+      error: error.message,
+      database: process.env.DB_NAME || 'distrital4_jefatura',
+      host: process.env.DB_HOST || 'localhost'
+    });
+    throw error;
   }
 }
 
@@ -97,9 +124,10 @@ app.use((req, res, next) => {
   const forbidden = [
     '/database.sqlite',
     '/database.sqlite-journal',
-    '/backup-pre-edit-2025-10-14.zip'
+    '/backup-pre-edit-2025-10-14.zip',
+    '/.env'
   ];
-  if (forbidden.includes(req.path) || /\.sqlite(\.|$)/i.test(req.path)) {
+  if (forbidden.includes(req.path) || /\.sqlite(\.|$)/i.test(req.path) || /\.env$/i.test(req.path)) {
     return res.status(404).end();
   }
   next();
