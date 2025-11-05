@@ -1,29 +1,31 @@
-# Dependencias
+# Dependencies
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Base de datos
-database.sqlite
+# Database
 *.sqlite
+*.sqlite3
 *.db
 
-# Variables de entorno
+# Environment variables
 .env
 .env.local
 .env.*.local
 
 # Logs
-logs/
+logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pm2-error.log
+pm2-out.log
 
-# Sistema operativo
+# OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -32,18 +34,13 @@ desktop.ini
 
 # PM2
 .pm2/
-ecosystem.config.js.bak
 
-# Archivos temporales
-*.tmp
-*.temp
-.cache/
-
-# Build
+# Build files
 dist/
 build/
 
-# Backup files
-*.bak
-*.backup
+# Temporary files
+tmp/
+temp/
+*.tmp
 
